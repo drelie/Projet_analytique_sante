@@ -1,21 +1,27 @@
-# Python
+# Ignorer tous les fichiers .csv
+*.csv
+
+# Mais NE PAS ignorer test_data.csv
+!test_data.csv
+
+# Ignorer les environnements virtuels
+.venv/
+env/
+ENV/
+
+# Dossiers Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Environnements virtuels
-.venv/
-env/
-ENV/
-
-# Données Excel
-*.xlsx
-
 # Dossiers de cache
 .cache/
 .cache_dir/
 
-# OS
+# Fichiers Excel
+*.xlsx
+
+# Fichiers système
 .DS_Store
 Thumbs.db
