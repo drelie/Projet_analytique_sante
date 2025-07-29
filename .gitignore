@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environnements virtuels
+.venv/
+env/
+ENV/
+
+# Données Excel
+*.xlsx
+
+# Dossiers de cache
+.cache/
+.cache_dir/
+
+# OS
+.DS_Store
+Thumbs.db
