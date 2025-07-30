@@ -1,24 +1,23 @@
-# Bibliothèques de Science des Données de Base
+# Bibliothèques de base
 pandas>=2.0.0
 numpy>=1.24.0
-scipy>=1.10.0
-scikit-learn>=1.3.0
+dask>=2023.1.0  # Nouvelle dépendance
+distributed>=2023.1.0  # Pour le clustering Dask
 
 # Visualisation
 matplotlib>=3.7.0
 seaborn>=0.12.0
 plotly>=5.15.0
 
-# Framework de Tableau de Bord
+# Framework de tableau de bord
 streamlit>=1.28.0
 
-# Prévision de Séries Temporelles
+# Prévision
 prophet>=1.1.4
 statsmodels>=0.14.0
-
-# Export Excel
-openpyxl>=3.1.0
-xlsxwriter>=3.1.0
+scikit-learn>=1.3.0
 
 # Utilitaires
 python-dateutil>=2.8.0
+openpyxl>=3.1.0
+xlsxwriter>=3.1.0

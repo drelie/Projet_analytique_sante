@@ -1,10 +1,12 @@
 """
 Analytique d'Optimisation des Ressources de Santé
-Modélisation avancée et analyse pour la planification des ressources de santé
+Version corrigée et optimisée
 """
 
 import pandas as pd
 import numpy as np
+import dask.dataframe as dd
+from dask.diagnostics import ProgressBar
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
@@ -31,259 +33,302 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 
-# Nouvelle importation pour la détection de l'année
+# Utilitaires
 import re
 import os
+import hashlib
+import pickle
+from functools import lru_cache
+from typing import Optional, Union, Dict, List
 
 class AnalytiqueAvanceeSante:
     """Analyse avancée des données de santé pour l'optimisation des ressources."""
 
-    def __init__(self, chemin_fichier_csv):
-        """Initialiser avec les données de santé.
-        Args:
-            chemin_fichier_csv (str ou pathlib.Path): Chemin vers le fichier CSV.
-        """
+    def __init__(self, chemin_fichier_csv: Union[str, os.PathLike], use_dask: bool = False):
+        """Initialiser avec les données de santé."""
         self.chemin_fichier_csv = str(chemin_fichier_csv)
-
-        if not os.path.exists(self.chemin_fichier_csv):
-            raise FileNotFoundError(f"Le fichier '{self.chemin_fichier_csv}' n'a pas été trouvé.")
-
-        if os.path.getsize(self.chemin_fichier_csv) == 0:
-            raise ValueError(f"Le fichier '{self.chemin_fichier_csv}' est vide.")
-
-        try:
-            self.donnees = pd.read_csv(self.chemin_fichier_csv)
-            if self.donnees.empty:
-                 raise ValueError(f"Le fichier '{self.chemin_fichier_csv}' est vide ou ne contient aucune donnée exploitable après lecture.")
-        except pd.errors.EmptyDataError:
-            raise ValueError(f"Le fichier '{self.chemin_fichier_csv}' est vide ou ne contient aucune donnée exploitable après lecture.")
-        except Exception as e:
-            raise ValueError(f"Erreur lors du chargement du fichier CSV '{self.chemin_fichier_csv}': {e}")
-
-        # Tenter d'extraire l'année du nom de fichier
-        match = re.search(r'(\d{4})', os.path.basename(self.chemin_fichier_csv))
-        # Si aucune année n'est trouvée, définir une valeur par défaut (par exemple, 2023)
-        self.annee_donnees = int(match.group(1)) if match else 2023 # <--- MODIFICATION ICI
-
-        self.donnees_mensuelles = self._transformer_en_mensuel()
+        self.use_dask = use_dask
+        self._dask_client = None
+        self.donnees = None
+        self.donnees_mensuelles = None
         self.modeles_prevision = {}
         self.resultats_optimisation = {}
+        self.annee_donnees = None
 
-    def _transformer_en_mensuel(self):
-        """Transforme les données brutes en un format mensuel si possible."""
+        self._charger_donnees()
+        self._preparer_donnees()
+
+    def _charger_donnees(self):
+        """Charge les données en mémoire avec optimisation automatique."""
+        if not os.path.exists(self.chemin_fichier_csv):
+            raise FileNotFoundError(f"Fichier '{self.chemin_fichier_csv}' introuvable.")
+
+        file_size = os.path.getsize(self.chemin_fichier_csv) / (1024 * 1024)  # Taille en MB
+        
+        if file_size > 100 or self.use_dask:
+            self.use_dask = True
+            self._init_dask_cluster()
+
+        try:
+            if self.use_dask:
+                print("Chargement avec Dask (traitement parallèle)...")
+                with ProgressBar():
+                    self.donnees = dd.read_csv(
+                        self.chemin_fichier_csv,
+                        dtype={'service': 'object'},
+                        assume_missing=True
+                    ).compute()
+            else:
+                self.donnees = pd.read_csv(
+                    self.chemin_fichier_csv,
+                    dtype={'service': 'object'},
+                    engine='c',
+                    low_memory=False
+                )
+                
+            if self.donnees.empty:
+                raise ValueError("Le fichier ne contient aucune donnée valide.")
+                
+        except Exception as e:
+            raise ValueError(f"Erreur lors du chargement: {str(e)}")
+
+    def _init_dask_cluster(self):
+        """Initialise un cluster Dask local pour le traitement parallèle."""
+        from dask.distributed import Client
+        self._dask_client = Client(
+            n_workers=min(4, os.cpu_count()),
+            threads_per_worker=2,
+            memory_limit='4GB'
+        )
+        print(f"Cluster Dask initialisé: {self._dask_client}")
+
+    def _preparer_donnees(self):
+        """Prépare et optimise les données chargées."""
+        match = re.search(r'(\d{4})', os.path.basename(self.chemin_fichier_csv))
+        self.annee_donnees = int(match.group(1)) if match else datetime.now().year
+
+        self._optimiser_memoire()
+        self.donnees_mensuelles = self._transformer_en_mensuel()
+
+    def _optimiser_memoire(self):
+        """Optimise l'utilisation mémoire des données."""
+        for col in self.donnees.select_dtypes(include=['float64']).columns:
+            self.donnees[col] = pd.to_numeric(self.donnees[col], downcast='float')
+        
+        for col in self.donnees.select_dtypes(include=['int64']).columns:
+            self.donnees[col] = pd.to_numeric(self.donnees[col], downcast='integer')
+            
+        for col in self.donnees.select_dtypes(include=['object']).columns:
+            if self.donnees[col].nunique() / len(self.donnees[col]) < 0.5:
+                self.donnees[col] = self.donnees[col].astype('category')
+
+    def _transformer_en_mensuel(self) -> pd.DataFrame:
+        """Transforme les données brutes en format mensuel optimisé."""
         if self.donnees is None or self.donnees.empty:
             return pd.DataFrame()
 
         mois_colonnes = ['JANVIER', 'FEVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN',
                          'JUILLET', 'AOUT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DECEMBRE']
         
-        # --- NOUVELLE VÉRIFICATION DES COLONNES ESSENTIELLES ---
-        # Si 'service' est une colonne essentielle pour le pivotement et 'JANVIER' pour la complétude
-        colonnes_essentielles_requises = ['service', 'JANVIER'] # Ajoutez toutes les colonnes requises
-        for col in colonnes_essentielles_requises:
-            if col not in self.donnees.columns:
-                raise ValueError(f"La colonne essentielle '{col}' est manquante dans le fichier.")
-        # --- FIN NOUVELLE VÉRIFICATION ---
-
-
+        if 'service' not in self.donnees.columns:
+            raise ValueError("La colonne 'service' est manquante.")
+        
         colonnes_presentes = [col for col in mois_colonnes if col in self.donnees.columns]
 
         if not colonnes_presentes:
-            print("Aucune colonne mensuelle trouvée pour la transformation. Utilisation des données telles quelles.")
-            if 'Annee' in self.donnees.columns and 'TOTAUX' in self.donnees.columns:
-                df_temp = self.donnees.copy()
-                df_temp['date'] = pd.to_datetime(df_temp['Annee'], format='%Y')
-                df_temp.rename(columns={'service': 'ds', 'TOTAUX': 'y'}, inplace=True)
-                return df_temp[['ds', 'y']].set_index('ds')
+            print("Aucune colonne mensuelle trouvée - utilisation des données brutes.")
             return self.donnees
 
-        for col in colonnes_presentes:
-            self.donnees[col] = pd.to_numeric(self.donnees[col], errors='coerce').fillna(0)
+        donnees_long = pd.melt(
+            self.donnees,
+            id_vars=['service'],
+            value_vars=colonnes_presentes,
+            var_name='mois',
+            value_name='valeur'
+        ).dropna(subset=['valeur'])
 
-        donnees_mensuelles = []
-        for index, row in self.donnees.iterrows():
-            service_name = row['service']
-            annee = self.annee_donnees
-            for i, month_col in enumerate(mois_colonnes):
-                if month_col in row.index:
-                    month_num = i + 1
-                    date_str = f"{annee}-{month_num:02d}-01"
-                    donnees_mensuelles.append({
-                        'service': service_name,
-                        'date': pd.to_datetime(date_str),
-                        'valeur': row[month_col]
-                    })
-        df_mensuel = pd.DataFrame(donnees_mensuelles)
+        mois_to_num = {m: i+1 for i, m in enumerate(mois_colonnes)}
+        donnees_long['date'] = pd.to_datetime(
+            donnees_long['mois'].map(mois_to_num).apply(
+                lambda m: f"{self.annee_donnees}-{m}-01"
+            )
+        )
 
-        df_mensuel = df_mensuel.pivot_table(index='date', columns='service', values='valeur', aggfunc='sum')
-        df_mensuel.fillna(0, inplace=True)
+        return donnees_long
 
-        return df_mensuel
-
-
-    def analyse_exploratoire_donnees(self):
-        """Réalise une analyse exploratoire des données et génère des visualisations."""
-        if self.donnees_mensuelles.empty:
-            print("Pas de données mensuelles pour l'analyse exploratoire.")
+    def analyse_exploratoire_donnees(self) -> Dict:
+        """Réalise une analyse exploratoire des données."""
+        if self.donnees_mensuelles is None or self.donnees_mensuelles.empty:
             return {}
 
-        print("📊 Réalisation de l'analyse exploratoire des données...")
+        stats = {
+            'nombre_services': self.donnees['service'].nunique(),
+            'periode_couverte': f"{self.donnees_mensuelles['date'].min().date()} to {self.donnees_mensuelles['date'].max().date()}",
+            'valeurs_manquantes': self.donnees.isna().sum().to_dict()
+        }
+
+        # Statistiques descriptives par service
+        stats_descriptives = {}
+        services_cles = ['consultant', 'consultation', 'vaccin', 'paludisme']
         
-        stats_descriptives = self.donnees_mensuelles.describe().to_dict()
-        print("\nStatistiques Descriptives des Données Mensuelles:")
-        for service, stats in stats_descriptives.items():
-            print(f"  Service '{service}':")
-            for stat_name, value in stats.items():
-                print(f"    {stat_name}: {value:.2f}")
+        for service in self.donnees['service'].unique():
+            if any(keyword in str(service).lower() for keyword in services_cles):
+                service_data = self.donnees_mensuelles[
+                    (self.donnees_mensuelles['service'] == service) & 
+                    (self.donnees_mensuelles['valeur'].notna())
+                ]
+                if not service_data.empty:
+                    stats_descriptives[service] = {
+                        'moyenne': service_data['valeur'].mean(),
+                        'mediane': service_data['valeur'].median(),
+                        'ecart_type': service_data['valeur'].std(),
+                        'total': service_data['valeur'].sum()
+                    }
 
-        fig = px.line(self.donnees_mensuelles.reset_index().melt(id_vars='date', var_name='Service', value_name='Valeur'),
-                      x='date', y='Valeur', color='Service',
-                      title='Tendances Mensuelles des Services au Fil du Temps')
-        return stats_descriptives
+        stats['statistiques_services'] = stats_descriptives
+        return stats
 
-    def prevision_demande(self, periodes_prevision=12, service_cible=None):
-        """Réalise la prévision de la demande pour les services."""
-        if self.donnees_mensuelles.empty:
-            print("Pas de données mensuelles pour la prévision.")
-            return
+    def prevision_demande(self, periodes_prevision: int = 12, service_cible: Optional[str] = None) -> Dict:
+        """Prévoit la demande pour les services."""
+        if self.donnees_mensuelles is None or self.donnees_mensuelles.empty:
+            return {}
 
-        print(f"🔮 Réalisation de la prévision de la demande pour {periodes_prevision} mois...")
-
-        services_a_prevoir = [service_cible] if service_cible else self.donnees_mensuelles.columns
-
-        for service in services_a_prevoir:
-            if service not in self.donnees_mensuelles.columns:
-                print(f"Service '{service}' non trouvé dans les données. Skipping.")
+        services = [service_cible] if service_cible else self.donnees['service'].unique()
+        
+        for service in services:
+            if not isinstance(service, str):
                 continue
 
-            print(f"  Prévision pour le service: {service}")
+            service_data = self.donnees_mensuelles[
+                (self.donnees_mensuelles['service'] == service) & 
+                (self.donnees_mensuelles['valeur'].notna())
+            ]
             
-            df_prophet = self.donnees_mensuelles[[service]].reset_index()
-            df_prophet.rename(columns={'date': 'ds', service: 'y'}, inplace=True)
+            if len(service_data) < 6:  # Pas assez de données
+                continue
 
-            model = Prophet(yearly_seasonality=True, daily_seasonality=False, weekly_seasonality=False)
-            model.fit(df_prophet)
-
-            future = model.make_future_dataframe(periods=periodes_prevision, freq='MS')
-            forecast = model.predict(future)
-            
-            self.modeles_prevision[service] = {
-                'model': model,
-                'forecast': forecast,
-                'data': df_prophet
-            }
-
-            df_merged = pd.merge(df_prophet, forecast[['ds', 'yhat']], on='ds', how='inner')
-            if not df_merged.empty:
-                r2 = r2_score(df_merged['y'], df_merged['yhat'])
-                print(f"    R2 Score pour {service} (sur données d'entraînement): {r2:.3f}")
-
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_prophet['ds'], y=df_prophet['y'], mode='lines', name='Réel', line=dict(color='blue')))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], mode='lines', name='Prévision', line=dict(color='red', dash='dash')))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines', name='Intervalle inférieur', line=dict(color='red', width=0), showlegend=False))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], mode='lines', name='Intervalle supérieur', fill='tonexty', fillcolor='rgba(255,0,0,0.1)', line=dict(color='red', width=0), showlegend=False))
-            fig.update_layout(title_text=f'Prévisions de Demande pour {service}', xaxis_title='Date', yaxis_title='Valeur')
+            try:
+                df = service_data[['date', 'valeur']].rename(columns={'date': 'ds', 'valeur': 'y'})
+                
+                model = Prophet(
+                    yearly_seasonality=True,
+                    daily_seasonality=False,
+                    weekly_seasonality=False,
+                    seasonality_mode='multiplicative'
+                )
+                model.fit(df)
+                
+                future = model.make_future_dataframe(periods=periodes_prevision, freq='MS')
+                forecast = model.predict(future)
+                
+                cache_key = f"model_{service}_{periodes_prevision}"
+                self.modeles_prevision[cache_key] = {
+                    'model': model,
+                    'forecast': forecast,
+                    'metrics': {
+                        'mae': mean_absolute_error(df['y'], forecast[:len(df)]['yhat']),
+                        'rmse': np.sqrt(mean_squared_error(df['y'], forecast[:len(df)]['yhat'])),
+                        'r2': r2_score(df['y'], forecast[:len(df)]['yhat'])
+                    }
+                }
+            except Exception as e:
+                print(f"Erreur lors de la prévision pour {service}: {str(e)}")
 
         return self.modeles_prevision
 
-    def optimisation_ressources(self):
-        """Détermine les recommandations d'optimisation des ressources."""
+    def optimisation_ressources(self) -> pd.DataFrame:
+        """Génère des recommandations d'optimisation des ressources."""
         if not self.modeles_prevision:
-            print("Aucun modèle de prévision disponible. Exécutez prevision_demande d'abord.")
-            return {}
+            self.prevision_demande()
 
-        print("⚙️ Détermination des recommandations d'optimisation des ressources...")
-        
         recommandations = []
         for service, data in self.modeles_prevision.items():
-            forecast_df = data['forecast']
-            donnees_actuelles = data['data']
+            service_name = service.replace('model_', '').split('_')[0]
+            forecast = data['forecast']
+            last_actual = data['metrics']['mae']
             
-            derniere_valeur_reelle = donnees_actuelles['y'].iloc[-1] if not donnees_actuelles.empty else 0
-            demande_future_estimee = forecast_df['yhat'].iloc[-1] 
-            
-            seuil_efficacite_cible = 0.90
-            efficacite_actuelle_simulee = np.random.uniform(0.60, 0.95) 
-
-            ressources_supplementaires_necessaires = 0
-            message_reco = "Capacité actuelle adéquate ou aucune règle d'optimisation définie."
-            cout_estime = 0
-            
-            if efficacite_actuelle_simulee < seuil_efficacite_cible:
-                if demande_future_estimee > derniere_valeur_reelle * 1.10:
-                    ressources_supplementaires_necessaires = int(np.ceil((demande_future_estimee - derniere_valeur_reelle) / 100))
-                    if ressources_supplementaires_necessaires > 0:
-                        message_reco = f"Augmenter les ressources de {ressources_supplementaires_necessaires} unités pour répondre à la demande future croissante et améliorer l'efficacité."
-                        cout_estime = ressources_supplementaires_necessaires * 500
-                elif efficacite_actuelle_simulee < 0.75:
-                    ressources_supplementaires_necessaires = int(np.ceil(derniere_valeur_reelle * (seuil_efficacite_cible - efficacite_actuelle_simulee) / 100))
-                    if ressources_supplementaires_necessaires > 0:
-                        message_reco = f"Augmenter les ressources de {ressources_supplementaires_necessaires} unités pour améliorer l'efficacité actuelle et atteindre la cible de {int(seuil_efficacite_cible*100)}%."
-                        cout_estime = ressources_supplementaires_necessaires * 500
-
             recommandations.append({
-                'Service': service,
-                'Dernière Valeur Réelle': derniere_valeur_reelle,
-                'Demande Future Estimée (M+1)': demande_future_estimee,
-                'Efficacité Actuelle Estimée (%)': round(efficacite_actuelle_simulee * 100, 2),
-                'Efficacité Cible (%)': int(seuil_efficacite_cible * 100),
-                'Ressources Supplémentaires Recommandées': ressources_supplementaires_necessaires,
-                'Coût Estimé (€)': cout_estime,
-                'Recommandation': message_reco
+                'Service': service_name,
+                'DemandePrévue': forecast['yhat'].iloc[-1],
+                'RessourcesNécessaires': max(0, forecast['yhat'].iloc[-1] - last_actual),
+                'Confiance': data['metrics']['r2'],
+                'Période': f"{forecast['ds'].iloc[-1].strftime('%Y-%m')}"
             })
-        
+
         self.resultats_optimisation = pd.DataFrame(recommandations)
-        print("\nRecommandations d'Optimisation Générées:")
-        print(self.resultats_optimisation.to_markdown(index=False))
-
         return self.resultats_optimisation
-    
-    def generer_rapport_insights(self, nom_fichier="rapport_analyse_sante.xlsx"):
-        """Génère un rapport consolidé des analyses et prévisions."""
-        print(f"📄 Génération du rapport d'analyse vers '{nom_fichier}'...")
 
-        with pd.ExcelWriter(nom_fichier, engine='xlsxwriter') as writer:
-            if not self.donnees_mensuelles.empty:
-                self.donnees_mensuelles.to_excel(writer, sheet_name='Donnees_Mensuelles')
-
-            for service, data in self.modeles_prevision.items():
-                if not data['forecast'].empty:
-                    data['forecast'].to_excel(writer, sheet_name=f'Prevision_{service.replace(" ", "_")}', index=False)
+    def generer_rapport(self, format: str = 'excel') -> str:
+        """Génère un rapport consolidé des analyses."""
+        if format == 'excel':
+            output_path = f"rapport_optimisation_{self.annee_donnees}.xlsx"
+            with pd.ExcelWriter(output_path) as writer:
+                # Résumé des données
+                summary = pd.DataFrame({
+                    'Métrique': ['Services uniques', 'Période couverte', 'Données manquantes'],
+                    'Valeur': [
+                        self.donnees['service'].nunique(),
+                        f"{self.donnees_mensuelles['date'].min().date()} to {self.donnees_mensuelles['date'].max().date()}",
+                        self.donnees.isna().sum().sum()
+                    ]
+                })
+                summary.to_excel(writer, sheet_name='Résumé', index=False)
+                
+                # Prévisions
+                if self.modeles_prevision:
+                    forecasts = pd.concat([
+                        pd.DataFrame({
+                            'Service': k.replace('model_', '').split('_')[0],
+                            'Date': v['forecast']['ds'],
+                            'Prévision': v['forecast']['yhat'],
+                            'Intervalle inférieur': v['forecast']['yhat_lower'],
+                            'Intervalle supérieur': v['forecast']['yhat_upper']
+                        }) for k, v in self.modeles_prevision.items()
+                    ])
+                    forecasts.to_excel(writer, sheet_name='Prévisions', index=False)
+                
+                # Optimisation
+                if not self.resultats_optimisation.empty:
+                    self.resultats_optimisation.to_excel(writer, sheet_name='Optimisation', index=False)
             
-            if not self.resultats_optimisation.empty:
-                donnees_optimisation_export = self.resultats_optimisation.copy()
-                donnees_optimisation_export.to_excel(writer, sheet_name='Optimisation', index=False)
-            
-            metriques_df = pd.DataFrame.from_dict(self.analyse_exploratoire_donnees(), orient='index')
-            if not metriques_df.empty:
-                metriques_df.to_excel(writer, sheet_name='Resume_Metriques_Cles')
-        
-        print(f"✅ Résultats exportés vers '{nom_fichier}'")
+            return output_path
+        else:
+            raise ValueError("Format non supporté")
 
-def main():
-    """Fonction d'exécution principale"""
-    print("🏥 ANALYTIQUE D'OPTIMISATION DES RESSOURCES DE SANTÉ")
-    print("=" * 60)
-    
-    import sys
-    if len(sys.argv) > 1:
-        chemin_fichier_csv = sys.argv[1]
-    else:
-        print("Veuillez spécifier le chemin du fichier CSV. Ex: python analytique_sante.py mon_fichier.csv")
-        return
-
-    try:
-        analytique = AnalytiqueAvanceeSante(chemin_fichier_csv)
-        
-        analytique.analyse_exploratoire_donnees()
-        analytique.prevision_demande()
-        analytique.optimisation_ressources()
-        analytique.generer_rapport_insights()
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Erreur d'initialisation : {e}")
-    except Exception as e:
-        print(f"Une erreur inattendue est survenue : {e}")
+    def __del__(self):
+        """Nettoyage des ressources."""
+        if self._dask_client:
+            self._dask_client.close()
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1:
+        try:
+            analyse = AnalytiqueAvanceeSante(sys.argv[1])
+            
+            # Analyse exploratoire
+            print("\n=== Analyse exploratoire ===")
+            exploratoire = analyse.analyse_exploratoire_donnees()
+            print(f"Nombre de services: {exploratoire.get('nombre_services')}")
+            print(f"Période couverte: {exploratoire.get('periode_couverte')}")
+            
+            # Prévisions
+            print("\n=== Prévisions ===")
+            previsions = analyse.prevision_demande()
+            for service, data in previsions.items():
+                print(f"{service}: MAE={data['metrics']['mae']:.2f}, R²={data['metrics']['r2']:.2f}")
+            
+            # Optimisation
+            print("\n=== Optimisation ===")
+            optimisation = analyse.optimisation_ressources()
+            print(optimisation.to_string(index=False))
+            
+            # Rapport
+            print("\n=== Génération du rapport ===")
+            rapport = analyse.generer_rapport()
+            print(f"Rapport généré: {rapport}")
+            
+        except Exception as e:
+            print(f"Erreur: {str(e)}")
+    else:
+        print("Usage: python analytique_sante.py <chemin_fichier.csv>")
