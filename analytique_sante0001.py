@@ -43,29 +43,6 @@ from typing import Optional, Union, Dict, List
 
 class AnalytiqueAvanceeSante:
     """Analyse avancée des données de santé pour l'optimisation des ressources."""
-    
-    # Dictionnaire de standardisation des noms de services
-    SERVICE_STANDARD = {
-        r"Nombre de consultants(?!.*<)": "Nb Consultants",
-        r"Nombre de consultants.*< *5": "Nb Consultants <5 ans",
-        r"Nombre de consultations(?!.*<)": "Nb Consultations",
-        r"Nombre de consultations.*< *5": "Nb Consultations <5 ans",
-        r"Accouchement.*établissement": "Accouchements",
-        r"Naissances vivantes": "Naissances vivantes",
-        r"TOTAL PALUDISME": "Paludisme",
-        r"TOTAL IRA": "Infections Respiratoires",
-        r"TOTAL DIARRHEES": "Diarrhées",
-        r"clients dépistés TOTAL": "Dépistage Total",
-        r"Femme.*dépistée VIH": "Femmes VIH+",
-        r"TOTAL CONSULTATION PF": "Consultations PF",
-        r"TDR positifs": "TDR Paludisme Positifs",
-        r"TOTAUX MORBIDITE": "Morbidité Totale",
-        r"DECES": "Décès",
-        r"Cas référés": "Référés",
-        r"Femmes.*vaccinées.*VAT": "Femmes Vaccinées VAT"
-    }
-    
-    SERVICES_CLES = list(SERVICE_STANDARD.values())
 
     def __init__(self, chemin_fichier_csv: Union[str, os.PathLike], use_dask: bool = False):
         """Initialiser avec les données de santé."""
@@ -80,14 +57,6 @@ class AnalytiqueAvanceeSante:
 
         self._charger_donnees()
         self._preparer_donnees()
-
-    def _standardiser_nom_service(self, nom: str) -> str:
-        """Standardise le nom du service selon le mapping défini."""
-        nom = str(nom).strip()
-        for pattern, standard in self.SERVICE_STANDARD.items():
-            if re.search(pattern, nom, re.IGNORECASE):
-                return standard
-        return nom
 
     def _charger_donnees(self):
         """Charge les données en mémoire avec optimisation automatique."""
@@ -138,17 +107,11 @@ class AnalytiqueAvanceeSante:
         match = re.search(r'(\d{4})', os.path.basename(self.chemin_fichier_csv))
         self.annee_donnees = int(match.group(1)) if match else datetime.now().year
 
-        # Standardiser les noms de services
-        self.donnees['service'] = self.donnees['service'].apply(self._standardiser_nom_service)
-        
         self._optimiser_memoire()
         self.donnees_mensuelles = self._transformer_en_mensuel()
 
     def _optimiser_memoire(self):
         """Optimise l'utilisation mémoire des données."""
-        # Filtrer uniquement les services clés
-        self.donnees = self.donnees[self.donnees['service'].isin(self.SERVICES_CLES)]
-        
         for col in self.donnees.select_dtypes(include=['float64']).columns:
             self.donnees[col] = pd.to_numeric(self.donnees[col], downcast='float')
         
@@ -200,11 +163,8 @@ class AnalytiqueAvanceeSante:
             value_vars=list(colonnes_trouvees.values()),
             var_name='mois_brut',
             value_name='valeur'
-        )
-        
-        # Supprimer uniquement les lignes où valeur OU date est manquante
-        donnees_long = donnees_long.dropna(subset=['valeur'])
-        
+        ).dropna(subset=['valeur'])
+
         # Créer un mapping inverse pour la normalisation
         mapping_normalisation = {v: k for k, v in colonnes_trouvees.items()}
         donnees_long['mois'] = donnees_long['mois_brut'].map(mapping_normalisation)
@@ -218,10 +178,7 @@ class AnalytiqueAvanceeSante:
             donnees_long['mois_num'].apply(
                 lambda m: f"{self.annee_donnees}-{m}-01"
             ), errors='coerce'
-        )
-        
-        # Supprimer les lignes avec date invalide
-        donnees_long = donnees_long.dropna(subset=['date'])
+        ).dropna()
 
         return donnees_long[['service', 'date', 'valeur', 'mois']]
 
@@ -231,113 +188,77 @@ class AnalytiqueAvanceeSante:
             return {}
 
         stats = {
-            'nombre_services': len(self.SERVICES_CLES),
+            'nombre_services': self.donnees['service'].nunique(),
             'periode_couverte': f"{self.donnees_mensuelles['date'].min().date()} to {self.donnees_mensuelles['date'].max().date()}",
             'valeurs_manquantes': self.donnees.isna().sum().to_dict()
         }
 
         # Statistiques descriptives par service
         stats_descriptives = {}
-        for service in self.SERVICES_CLES:
-            service_data = self.donnees_mensuelles[
-                (self.donnees_mensuelles['service'] == service) & 
-                (self.donnees_mensuelles['valeur'].notna())
-            ]
-            if not service_data.empty:
-                stats_descriptives[service] = {
-                    'moyenne': service_data['valeur'].mean(),
-                    'mediane': service_data['valeur'].median(),
-                    'ecart_type': service_data['valeur'].std(),
-                    'total': service_data['valeur'].sum()
-                }
+        services_cles = ['consultant', 'consultation', 'vaccin', 'paludisme']
+        
+        for service in self.donnees['service'].unique():
+            if any(keyword in str(service).lower() for keyword in services_cles):
+                service_data = self.donnees_mensuelles[
+                    (self.donnees_mensuelles['service'] == service) & 
+                    (self.donnees_mensuelles['valeur'].notna())
+                ]
+                if not service_data.empty:
+                    stats_descriptives[service] = {
+                        'moyenne': service_data['valeur'].mean(),
+                        'mediane': service_data['valeur'].median(),
+                        'ecart_type': service_data['valeur'].std(),
+                        'total': service_data['valeur'].sum()
+                    }
 
         stats['statistiques_services'] = stats_descriptives
         return stats
 
     def prevision_demande(self, periodes_prevision: int = 12, service_cible: Optional[str] = None) -> Dict:
-        """Prévoit la demande pour les services clés."""
+        """Prévoit la demande pour les services."""
         if self.donnees_mensuelles is None or self.donnees_mensuelles.empty:
             return {}
 
-        # Filtrer uniquement les services clés
-        services = [service_cible] if service_cible else self.SERVICES_CLES
-        
-        print(f"⏳ Prévision pour {len(services)} services clés")
+        services = [service_cible] if service_cible else self.donnees['service'].unique()
         
         for service in services:
+            if not isinstance(service, str):
+                continue
+
             service_data = self.donnees_mensuelles[
                 (self.donnees_mensuelles['service'] == service) & 
                 (self.donnees_mensuelles['valeur'].notna())
             ]
             
             if len(service_data) < 6:  # Pas assez de données
-                print(f"⚠️ Pas assez de données pour {service} ({len(service_data)} points)")
                 continue
+
+            try:
+                df = service_data[['date', 'valeur']].rename(columns={'date': 'ds', 'valeur': 'y'})
                 
-            # Vérifier si les données sont constantes
-            if service_data['valeur'].nunique() == 1:
-                print(f"⚠️ Données constantes pour {service} - utilisation de la dernière valeur")
-                last_value = service_data['valeur'].iloc[-1]
-                forecast_dates = pd.date_range(
-                    start=service_data['date'].iloc[-1] + pd.DateOffset(months=1),
-                    periods=periodes_prevision,
-                    freq='MS'
+                model = Prophet(
+                    yearly_seasonality=True,
+                    daily_seasonality=False,
+                    weekly_seasonality=False,
+                    seasonality_mode='multiplicative'
                 )
-                forecast = pd.DataFrame({
-                    'ds': forecast_dates,
-                    'yhat': [last_value] * periodes_prevision,
-                    'yhat_lower': [last_value] * periodes_prevision,
-                    'yhat_upper': [last_value] * periodes_prevision
-                })
+                model.fit(df)
                 
-                # Métriques pour données constantes
-                mae = 0.0
-                r2 = 1.0
-            else:
-                try:
-                    # Préparation des données pour Prophet
-                    df = service_data[['date', 'valeur']].rename(columns={'date': 'ds', 'valeur': 'y'})
-                    
-                    model = Prophet(
-                        yearly_seasonality=True,
-                        daily_seasonality=False,
-                        weekly_seasonality=False,
-                        seasonality_mode='multiplicative'
-                    )
-                    model.fit(df)
-                    
-                    # Génération des prévisions
-                    future = model.make_future_dataframe(periods=periodes_prevision, freq='MS')
-                    forecast = model.predict(future)
-                    
-                    # Post-processing: éliminer les valeurs négatives
-                    forecast['yhat'] = forecast['yhat'].clip(lower=0)
-                    forecast['yhat_lower'] = forecast['yhat_lower'].clip(lower=0)
-                    forecast['yhat_upper'] = forecast['yhat_upper'].clip(lower=0)
-                    
-                    # Calcul des métriques
-                    evaluation = forecast.set_index('ds')[['yhat']].join(df.set_index('ds'))
-                    evaluation = evaluation.dropna()
-                    
-                    if len(evaluation) > 2:
-                        mae = mean_absolute_error(evaluation['y'], evaluation['yhat'])
-                        r2 = r2_score(evaluation['y'], evaluation['yhat'])
-                    else:
-                        mae = r2 = np.nan
-                except Exception as e:
-                    print(f"❌ Erreur lors de la prévision pour {service}: {str(e)}")
-                    continue
-            
-            cache_key = f"model_{service}_{periodes_prevision}"
-            self.modeles_prevision[cache_key] = {
-                'model': model if 'model' in locals() else None,
-                'forecast': forecast,
-                'metrics': {
-                    'mae': mae,
-                    'r2': r2
+                future = model.make_future_dataframe(periods=periodes_prevision, freq='MS')
+                forecast = model.predict(future)
+                
+                cache_key = f"model_{service}_{periodes_prevision}"
+                self.modeles_prevision[cache_key] = {
+                    'model': model,
+                    'forecast': forecast,
+                    'metrics': {
+                        'mae': mean_absolute_error(df['y'], forecast[:len(df)]['yhat']),
+                        'rmse': np.sqrt(mean_squared_error(df['y'], forecast[:len(df)]['yhat'])),
+                        'r2': r2_score(df['y'], forecast[:len(df)]['yhat'])
+                    }
                 }
-            }
-            print(f"✅ Prévision terminée pour {service}")
+            except Exception as e:
+                print(f"Erreur lors de la prévision pour {service}: {str(e)}")
 
         return self.modeles_prevision
 
@@ -350,31 +271,14 @@ class AnalytiqueAvanceeSante:
         for service, data in self.modeles_prevision.items():
             service_name = service.replace('model_', '').split('_')[0]
             forecast = data['forecast']
-            last_actual = data['metrics']['mae'] if not np.isnan(data['metrics']['mae']) else 0
-            
-            # Calcul de la dernière valeur réelle
-            last_value = None
-            if self.donnees_mensuelles is not None:
-                service_data = self.donnees_mensuelles[
-                    (self.donnees_mensuelles['service'] == service_name) & 
-                    (self.donnees_mensuelles['valeur'].notna())
-                ]
-                if not service_data.empty:
-                    last_value = service_data['valeur'].iloc[-1]
-            
-            # Calcul des ressources nécessaires
-            derniere_prevision = forecast['yhat'].iloc[-1] if not forecast.empty else 0
-            ressources_necessaires = max(0, derniere_prevision - (last_value or 0))
-            
-            # Période correcte
-            periode = forecast['ds'].iloc[-1].strftime('%Y-%m') if not forecast.empty else "N/A"
+            last_actual = data['metrics']['mae']
             
             recommandations.append({
                 'Service': service_name,
-                'DemandePrévue': derniere_prevision,
-                'RessourcesNécessaires': ressources_necessaires,
+                'DemandePrévue': forecast['yhat'].iloc[-1],
+                'RessourcesNécessaires': max(0, forecast['yhat'].iloc[-1] - last_actual),
                 'Confiance': data['metrics']['r2'],
-                'Période': periode
+                'Période': f"{forecast['ds'].iloc[-1].strftime('%Y-%m')}"
             })
 
         self.resultats_optimisation = pd.DataFrame(recommandations)
@@ -389,7 +293,7 @@ class AnalytiqueAvanceeSante:
                 summary = pd.DataFrame({
                     'Métrique': ['Services uniques', 'Période couverte', 'Données manquantes'],
                     'Valeur': [
-                        len(self.SERVICES_CLES),
+                        self.donnees['service'].nunique(),
                         f"{self.donnees_mensuelles['date'].min().date()} to {self.donnees_mensuelles['date'].max().date()}",
                         self.donnees.isna().sum().sum()
                     ]

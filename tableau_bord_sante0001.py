@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Tableau de Bord d'Optimisation des Ressources Santé
-Version avec standardisation des services clés
+Version corrigée avec import Prophet
 """
 
 import pandas as pd
@@ -15,7 +15,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Import nécessaire pour les prévisions
-from prophet import Prophet
+from prophet import Prophet  # <-- Correction ajoutée ici
 
 # Utilitaires
 import re
@@ -23,41 +23,12 @@ import os
 from io import BytesIO
 
 class AnalytiqueSante:
-    # Dictionnaire de standardisation des noms de services
-    SERVICE_STANDARD = {
-        r"Nombre de consultants(?!.*<)": "Nb Consultants",
-        r"Nombre de consultants.*< *5": "Nb Consultants <5 ans",
-        r"Nombre de consultations(?!.*<)": "Nb Consultations",
-        r"Nombre de consultations.*< *5": "Nb Consultations <5 ans",
-        r"Accouchement.*établissement": "Accouchements",
-        r"Naissances vivantes": "Naissances vivantes",
-        r"TOTAL PALUDISME": "Paludisme",
-        r"TOTAL IRA": "Infections Respiratoires",
-        r"TOTAL DIARRHEES": "Diarrhées",
-        r"clients dépistés TOTAL": "Dépistage Total",
-        r"Femme.*dépistée VIH": "Femmes VIH+",
-        r"TOTAL CONSULTATION PF": "Consultations PF",
-        r"TDR positifs": "TDR Paludisme Positifs",
-        r"TOTAUX MORBIDITE": "Morbidité Totale",
-        r"DECES": "Décès",
-        r"Cas référés": "Référés",
-        r"Femmes.*vaccinées.*VAT": "Femmes Vaccinées VAT"
-    }
-    
-    SERVICES_CLES = list(SERVICE_STANDARD.values())
-    
     def __init__(self):
         self.donnees = None
         self.donnees_mensuelles = None
+        self.modeles_prevision = {}
         self.annee_donnees = None
-
-    def _standardiser_nom_service(self, nom: str) -> str:
-        """Standardise le nom du service selon le mapping défini."""
-        nom = str(nom).strip()
-        for pattern, standard in self.SERVICE_STANDARD.items():
-            if re.search(pattern, nom, re.IGNORECASE):
-                return standard
-        return nom
+        self.resultats_optimisation = {}
 
     def charger_donnees(self, fichier_upload) -> bool:
         """Charge les données depuis un fichier uploadé."""
@@ -73,12 +44,6 @@ class AnalytiqueSante:
             match = re.search(r'(\d{4})', fichier_upload.name)
             self.annee_donnees = int(match.group(1)) if match else datetime.now().year
 
-            # Standardiser les noms de services
-            self.donnees['service'] = self.donnees['service'].apply(self._standardiser_nom_service)
-            
-            # Filtrer uniquement les services clés
-            self.donnees = self.donnees[self.donnees['service'].isin(self.SERVICES_CLES)]
-            
             # Nettoyage
             self.donnees.columns = self.donnees.columns.str.strip()
             self.donnees = self.donnees[self.donnees['service'].notna()].copy()
@@ -86,7 +51,7 @@ class AnalytiqueSante:
             # Transformation
             self.donnees_mensuelles = self._transformer_en_mensuel()
             
-            st.success(f"Données chargées: {len(self.donnees)} services clés")
+            st.success(f"Données chargées: {len(self.donnees)} services, {len(self.donnees_mensuelles)} enregistrements")
             return True
             
         except Exception as e:
@@ -95,9 +60,6 @@ class AnalytiqueSante:
 
     def _transformer_en_mensuel(self) -> pd.DataFrame:
         """Transforme les données en format mensuel en gérant les colonnes manquantes et les variantes de noms."""
-        if self.donnees is None or self.donnees.empty:
-            return pd.DataFrame()
-            
         # Dictionnaire de variantes pour chaque mois
         mois_variantes = {
             'JANVIER': ['JAN', 'JANVIER', 'JANUARY', 'JANV'],
@@ -164,27 +126,33 @@ class AnalytiqueSante:
 
         # KPIs
         col1, col2, col3 = st.columns(3)
-        col1.metric("Services Clés", len(self.SERVICES_CLES))
+        col1.metric("Services Uniques", self.donnees['service'].nunique())
         col2.metric("Enregistrements Mensuels", len(self.donnees_mensuelles))
         col3.metric("Année des Données", self.annee_donnees)
 
-        # Visualisation des services
-        if not self.donnees_mensuelles.empty:
+        # Visualisation des catégories
+        categories = self._categoriser_services()
+        if categories:
             fig_pie = px.pie(
-                self.donnees_mensuelles.groupby('service').size().reset_index(name='count'),
-                values='count',
-                names='service',
-                title='Répartition des Services Clés',
+                pd.DataFrame(categories.items(), columns=['Catégorie', 'Nombre']),
+                values='Nombre',
+                names='Catégorie',
+                title='Distribution des Services par Catégorie',
                 hole=0.3
             )
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.warning("Aucune donnée à afficher")
+            st.warning("Aucune catégorie à afficher")
 
         # Tendances temporelles
-        if not self.donnees_mensuelles.empty:
+        services_cles = ['consultant', 'consultation']  # Motifs à rechercher
+        df_filtre = self.donnees_mensuelles[
+            self.donnees_mensuelles['service'].str.contains('|'.join(services_cles), case=False, na=False)
+        ]
+        
+        if not df_filtre.empty:
             fig_tendance = px.line(
-                self.donnees_mensuelles,
+                df_filtre,
                 x='date',
                 y='valeur',
                 color='service',
@@ -193,7 +161,33 @@ class AnalytiqueSante:
             )
             st.plotly_chart(fig_tendance, use_container_width=True)
         else:
-            st.warning("Aucune donnée de tendance disponible")
+            st.warning("Aucune donnée de tendance disponible pour les services clés")
+
+    def _categoriser_services(self) -> dict:
+        """Catégorise les services pour l'analyse."""
+        if self.donnees is None or 'service' not in self.donnees.columns:
+            return {}
+
+        services = self.donnees['service'].str.lower().fillna('')
+        
+        categories = {
+            'Consultations': services.str.contains('consultation', na=False).sum(),
+            'Personnel': services.str.contains('consultant', na=False).sum(),
+            'Vaccinations': services.str.contains('vaccin', na=False).sum(),
+            'Pathologies': services.str.contains('paludisme|diarrhée|toux|fièvre|ira', na=False).sum(),
+            'Maternité': services.str.contains('cpn|prénatale|grossesse|accouchement', na=False).sum(),
+            'Traitements': services.str.contains('pansement|injection|perfusion|chirurgie', na=False).sum(),
+            'Autres': len(services) - sum([
+                services.str.contains('consultation', na=False).sum(),
+                services.str.contains('consultant', na=False).sum(),
+                services.str.contains('vaccin', na=False).sum(),
+                services.str.contains('paludisme|diarrhée|toux|fièvre|ira', na=False).sum(),
+                services.str.contains('cpn|prénatale|grossesse|accouchement', na=False).sum(),
+                services.str.contains('pansement|injection|perfusion|chirurgie', na=False).sum()
+            ])
+        }
+        
+        return {k: v for k, v in categories.items() if v > 0}
 
     def prevision_demande(self, periodes: int = 6):
         """Prévoit la demande pour les services clés."""
@@ -201,20 +195,20 @@ class AnalytiqueSante:
             st.warning("Aucune donnée disponible pour la prévision")
             return
 
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        services_cles = ['consultant', 'consultation']  # Motifs à rechercher
+        df_filtre = self.donnees_mensuelles[
+            self.donnees_mensuelles['service'].str.contains('|'.join(services_cles), case=False, na=False)
+        ]
         
-        # Traiter tous les services clés
-        for i, service in enumerate(self.SERVICES_CLES):
-            status_text.text(f"Traitement du service {i+1}/{len(self.SERVICES_CLES)}: {service}")
-            progress_bar.progress((i+1)/len(self.SERVICES_CLES))
+        # Filtrer les services avec suffisamment de données
+        services_valides = df_filtre.groupby('service').filter(lambda x: len(x) >= 6)['service'].unique()
+        
+        if not services_valides.size:
+            st.warning("Aucun service avec suffisamment de données pour la prévision (minimum 6 mois requis)")
+            return
             
-            df_service = self.donnees_mensuelles[
-                self.donnees_mensuelles['service'] == service
-            ]
-            
-            if df_service.empty:
-                continue
+        for service in services_valides:
+            df_service = df_filtre[df_filtre['service'] == service]
                 
             try:
                 # Préparation des données pour Prophet
@@ -228,7 +222,7 @@ class AnalytiqueSante:
                 future = model.make_future_dataframe(periods=periodes, freq='M')
                 forecast = model.predict(future)
                 
-                # Visualisation - prévisions en rouge
+                # Visualisation - TOUTES LES PRÉVISIONS EN ROUGE
                 fig = go.Figure()
                 
                 # Historique en bleu
@@ -237,7 +231,7 @@ class AnalytiqueSante:
                     y=df_prophet['y'], 
                     name='Historique', 
                     mode='lines+markers',
-                    line=dict(color='blue')
+                    line=dict(color='blue')  # Couleur historique
                 ))
                 
                 # Prévision en rouge
@@ -245,20 +239,21 @@ class AnalytiqueSante:
                     x=forecast['ds'], 
                     y=forecast['yhat'], 
                     name='Prévision', 
-                    line=dict(dash='dash', color='red')
+                    line=dict(dash='dash', color='red')  # Toutes les prévisions en rouge
                 ))
                 
+                # Mise en forme du graphique
                 fig.update_layout(
                     title=f"Prévision pour {service}",
                     xaxis_title="Date",
-                    yaxis_title="Valeur"
+                    yaxis_title="Valeur",
+                    showlegend=True
                 )
+                
+                # Affichage dans Streamlit
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Erreur lors de la prévision pour {service}: {str(e)}")
-        
-        progress_bar.empty()
-        status_text.empty()
 
     def generer_rapport_insights(self):
         """Génère un rapport d'analyse téléchargeable."""
@@ -272,9 +267,10 @@ class AnalytiqueSante:
             # Données mensuelles
             self.donnees_mensuelles.to_excel(writer, sheet_name='Donnees_Mensuelles')
             
-            # Statistiques descriptives
-            stats = self.donnees_mensuelles.groupby('service')['valeur'].agg(['mean', 'median', 'std', 'sum'])
-            stats.to_excel(writer, sheet_name='Statistiques')
+            # Résultats d'optimisation
+            if hasattr(self, 'resultats_optimisation') and self.resultats_optimisation is not None:
+                pd.DataFrame(self.resultats_optimisation).to_excel(
+                    writer, sheet_name='Optimisation', index=False)
         
         st.download_button(
             label="Télécharger le rapport complet",

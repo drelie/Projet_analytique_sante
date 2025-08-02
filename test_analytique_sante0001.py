@@ -13,29 +13,31 @@ def create_test_data_dir(tmp_path_factory):
 
 @pytest.fixture
 def sample_data_path(create_test_data_dir):
-    # Utilisation des noms standardisés
+    # Correction : suppression de l'espace final dans le nom du service VIH
     data = {
         'Service': [
-            'Nb Consultants',            # Clé
-            'Accouchements',             # Clé
-            'Paludisme',                 # Clé
-            'Nb Consultations',          # Clé
-            'Naissances vivantes',       # Clé
-            'Infections Respiratoires',  # Clé
-            'Femmes VIH+'                # Clé
+            'Nombre de consultants',            # Clé
+            'Accouchement dans l’établissement', # Clé
+            'TOTAL PALUDISME',                 # Clé
+            'Service Non Pertinent A',         # Non clé
+            'Nombre de consultations',         # Clé
+            'Service Non Pertinent B',         # Non clé
+            'Naissances vivantes',             # Clé
+            'TOTAL IRA',                       # Clé
+            'Femme Enceinte ou allaitante dépistée VIH+' # Clé (corrigé)
         ],
-        'JANVIER': [100, 50, 120, 60, 30, 40, 25],
-        'FÉVRIER': [110, 55, 130, 65, 32, 42, 28],
-        'MARS': [120, 60, 140, 70, 35, 45, 30],
-        'AVRIL': [130, 65, 150, 75, 38, 48, 32],
-        'MAI': [140, 70, 160, 80, 40, 50, 35],
-        'JUIN': [150, 75, 170, 85, 42, 52, 38],
-        'JUILLET': [160, 80, 180, 90, 45, 55, 40],
-        'AOÛT': [170, 85, 190, 95, 48, 58, 42],
-        'SEPTEMBRE': [180, 90, 200, 100, 50, 60, 45],
-        'OCTOBRE': [190, 95, 210, 105, 52, 62, 48],
-        'NOVEMBRE': [200, 100, 220, 110, 55, 65, 50],
-        'DÉCEMBRE': [210, 105, 230, 115, 58, 68, 52],
+        'JANVIER': [100, 50, 120, 10, 60, 5, 30, 40, 25],
+        'FÉVRIER': [110, 55, 130, 12, 65, 6, 32, 42, 28],
+        'MARS': [120, 60, 140, 15, 70, 7, 35, 45, 30],
+        'AVRIL': [130, 65, 150, 18, 75, 8, 38, 48, 32],
+        'MAI': [140, 70, 160, 20, 80, 9, 40, 50, 35],
+        'JUIN': [150, 75, 170, 22, 85, 10, 42, 52, 38],
+        'JUILLET': [160, 80, 180, 25, 90, 11, 45, 55, 40],
+        'AOÛT': [170, 85, 190, 28, 95, 12, 48, 58, 42],
+        'SEPTEMBRE': [180, 90, 200, 30, 100, 13, 50, 60, 45],
+        'OCTOBRE': [190, 95, 210, 32, 105, 14, 52, 62, 48],
+        'NOVEMBRE': [200, 100, 220, 35, 110, 15, 55, 65, 50],
+        'DÉCEMBRE': [210, 105, 230, 38, 115, 16, 58, 68, 52],
     }
     df = pd.DataFrame(data)
     filepath = create_test_data_dir / "sample_data_2023.csv"
@@ -45,7 +47,7 @@ def sample_data_path(create_test_data_dir):
 @pytest.fixture
 def sample_data_with_missing_months_path(create_test_data_dir):
     data = {
-        'Service': ['Nb Consultants', 'Infections Respiratoires'],
+        'Service': ['Nombre de consultants', 'TOTAL IRA'],
         'JANVIER': [100, 50],
         'FÉVRIER': [110, 55],
     }
@@ -75,7 +77,7 @@ def invalid_data_path(create_test_data_dir):
 @pytest.fixture
 def data_without_full_months(create_test_data_dir):
     data = {
-        'Service': ['Nb Consultations', 'Naissances vivantes'],
+        'Service': ['Nombre de consultations', 'Naissances vivantes'],
         'JANVIER': [100, 50],
         'FÉVRIER': [110, 55],
     }
@@ -94,9 +96,8 @@ class TestAnalytiqueAvanceeSante:
         
         # Vérification des services standardisés
         expected_standard_services = sorted([
-            'Nb Consultants', 'Accouchements', 'Paludisme',
-            'Nb Consultations', 'Naissances vivantes', 
-            'Infections Respiratoires', 'Femmes VIH+'
+            'Consultants', 'Accouchements', 'PaludismeTotal',
+            'Consultations', 'NaissancesVivantes', 'IRATotal', 'FemmesVIH+'
         ])
         assert sorted(analytique.get_services_uniques()) == expected_standard_services
 
@@ -146,14 +147,35 @@ class TestAnalytiqueAvanceeSante:
         analytique = AnalytiqueAvanceeSante(sample_data_path)
         services = analytique.get_services_uniques()
         assert services == [
-            'Nb Consultants', 'Accouchements', 'Paludisme',
-            'Nb Consultations', 'Naissances vivantes', 
-            'Infections Respiratoires', 'Femmes VIH+'
+            'Consultants', 'Accouchements', 'PaludismeTotal',
+            'Consultations', 'NaissancesVivantes', 'IRATotal', 'FemmesVIH+'
         ]
+
+    def test_categorisation_automatique(self, sample_data_path):
+        analytique = AnalytiqueAvanceeSante(sample_data_path)
+        assert 'categorie_service' in analytique.df_mensuel.columns
+        
+        # Vérification des catégories
+        categories = analytique.df_mensuel['categorie_service'].unique()
+        expected_categories = [
+            'Consultations & Personnel',
+            'Maternité & Naissance',
+            'Maladies Majeures',
+            'Dépistage & Diagnostic'
+        ]
+        for cat in expected_categories:
+            assert cat in categories
+
+    def test_get_data_summary(self, sample_data_path):
+        analytique = AnalytiqueAvanceeSante(sample_data_path)
+        summary = analytique.get_data_summary()
+        
+        assert summary['nombre_services_uniques'] == 7
+        assert summary['total_consultations_ou_interventions'] == 425 * 12  # Total annuel
 
     def test_preparer_donnees_prediction(self, sample_data_path):
         analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
+        service_test = 'Consultants'
         df_prepared = analytique.preparer_donnees_prediction(service_test)
         
         assert len(df_prepared) == 12
@@ -167,7 +189,7 @@ class TestAnalytiqueAvanceeSante:
 
     def test_faire_predictions_prophet(self, sample_data_path):
         analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
+        service_test = 'Consultants'
         df_prepared = analytique.preparer_donnees_prediction(service_test)
         
         predictions = analytique.faire_predictions(df_prepared, modele='Prophet', periodes_futur=3)
@@ -185,7 +207,7 @@ class TestAnalytiqueAvanceeSante:
 
     def test_faire_predictions_invalid_model(self, sample_data_path):
         analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Paludisme'
+        service_test = 'PaludismeTotal'
         df_prepared = analytique.preparer_donnees_prediction(service_test)
         
         predictions = analytique.faire_predictions(df_prepared, modele='InvalidModel', periodes_futur=3)
@@ -194,7 +216,7 @@ class TestAnalytiqueAvanceeSante:
 
     def test_optimisation_des_ressources(self, sample_data_path):
         analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
+        service_test = 'Consultants'
         df_prepared = analytique.preparer_donnees_prediction(service_test)
         predictions = analytique.faire_predictions(df_prepared, modele='Prophet', periodes_futur=3)
         
@@ -213,7 +235,7 @@ class TestAnalytiqueAvanceeSante:
 
     def test_integration_data_flow(self, sample_data_path):
         analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
+        service_test = 'Consultants'
         
         # Chargement et transformation
         assert analytique.df is not None
