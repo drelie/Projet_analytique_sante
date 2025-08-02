@@ -222,15 +222,35 @@ class AnalytiqueSante:
                 future = model.make_future_dataframe(periods=periodes, freq='M')
                 forecast = model.predict(future)
                 
-                # Visualisation
+                # Visualisation - TOUTES LES PRÉVISIONS EN ROUGE
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_prophet['ds'], y=df_prophet['y'], name='Historique', mode='lines+markers'))
-                fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], name='Prévision', line=dict(dash='dash')))
+                
+                # Historique en bleu
+                fig.add_trace(go.Scatter(
+                    x=df_prophet['ds'], 
+                    y=df_prophet['y'], 
+                    name='Historique', 
+                    mode='lines+markers',
+                    line=dict(color='blue')  # Couleur historique
+                ))
+                
+                # Prévision en rouge
+                fig.add_trace(go.Scatter(
+                    x=forecast['ds'], 
+                    y=forecast['yhat'], 
+                    name='Prévision', 
+                    line=dict(dash='dash', color='red')  # Toutes les prévisions en rouge
+                ))
+                
+                # Mise en forme du graphique
                 fig.update_layout(
                     title=f"Prévision pour {service}",
                     xaxis_title="Date",
-                    yaxis_title="Valeur"
+                    yaxis_title="Valeur",
+                    showlegend=True
                 )
+                
+                # Affichage dans Streamlit
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.error(f"Erreur lors de la prévision pour {service}: {str(e)}")
