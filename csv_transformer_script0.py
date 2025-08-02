@@ -25,126 +25,40 @@ class HealthcareExcelTransformer:
         self.transformed_data = None
         self.year = None
         self.header_row_index = None # Nouvelle variable pour stocker l'index de la ligne d'en-tête
-        
-        # Mapping des colonnes avec toutes les variantes possibles
         self.column_mapping = {
-            # Mapping Excel headers → CSV headers avec variantes
+            # Mapping Excel headers → CSV headers (avec les abréviations réelles trouvées dans les fichiers)
             'JANVIER': 'JANVIER',
-            'JAN': 'JANVIER',
-            'JANUARY': 'JANVIER',
-            'JANV': 'JANVIER',
-            
-            'FEVRIER': 'FEVRIER',
-            'FEV': 'FEVRIER',
-            'FEBRUARY': 'FEVRIER',
-            'FÉVRIER': 'FEVRIER',
-            'FEB': 'FEVRIER',
-            
+            'FEVRIER': 'FEVRIER', 
             'MARS': 'MARS',
-            'MAR': 'MARS',
-            'MARCH': 'MARS',
-            
             'T1': 'T1',
-            'TRIM1': 'T1',
-            'TRIMESTRE1': 'T1',
-            
             'AVRIL': 'AVRIL',
-            'AVR': 'AVRIL',
-            'APRIL': 'AVRIL',
-            'APR': 'AVRIL',
-            
             'MAI': 'MAI',
-            'MAY': 'MAI',
-            
             'JUIN': 'JUIN',
-            'JUN': 'JUIN',
-            'JUNE': 'JUIN',
-            
             'T2': 'T2',
-            'TRIM2': 'T2',
-            'TRIMESTRE2': 'T2',
-            
             'S1': 'S1',
-            'SEMESTRE1': 'S1',
-            
             'JUILLET': 'JUILLET',
-            'JUL': 'JUILLET',
-            'JULY': 'JUILLET',
-            
             'AOÛT': 'AOÛT',
-            'AOUT': 'AOÛT',
-            'AUG': 'AOÛT',
-            'AUGUST': 'AOÛT',
-            
-            'SEPTEM': 'SEPTEMBRE',
-            'SEPTEMBRE': 'SEPTEMBRE',
-            'SEPT': 'SEPTEMBRE',
-            'SEPTEMBER': 'SEPTEMBRE',
-            'SEP': 'SEPTEMBRE',
-            
+            'SEPTEM': 'SEPTEMBRE',   # Nom de colonne Excel réel pour 2023/2024
+            'SEPTEMBRE': 'SEPTEMBRE', # Pour les années où il pourrait être complet
             'T3': 'T3',
-            'TRIM3': 'T3',
-            'TRIMESTRE3': 'T3',
-            'T3 TO': 'T3 TO',
-            'T3.1': 'T3 TO',
-            'T3_2': 'T3 TO',
-            
-            'OCTOB': 'OCTOBRE',
+            'T3 TO': 'T3 TO',       # Nom de colonne CSV cible
+            'T3.1': 'T3 TO',        # Nom de colonne Excel réel pour 2023/2024
+            'T3_2': 'T3 TO',        # Autre variation potentielle
+            'OCTOB': 'OCTOBRE',     # Nom de colonne Excel réel
             'OCTOBRE': 'OCTOBRE',
-            'OCT': 'OCTOBRE',
-            'OCTOBER': 'OCTOBRE',
-            
-            'NOVEM': 'NOVEMBRE',
+            'NOVEM': 'NOVEMBRE',    # Nom de colonne Excel réel
             'NOVEMBRE': 'NOVEMBRE',
-            'NOV': 'NOVEMBRE',
-            'NOVEMBER': 'NOVEMBRE',
-            
-            'DÉCEM': 'DÉCEMBRE',
-            'DECEM': 'DÉCEMBRE',
+            'DÉCEM': 'DÉCEMBRE',    # Nom de colonne Excel réel
             'DÉCEMBRE': 'DÉCEMBRE',
-            'DECEMBRE': 'DÉCEMBRE',
-            'DEC': 'DÉCEMBRE',
-            'DECEMBER': 'DÉCEMBRE',
-            
             'T4': 'T4',
-            'TRIM4': 'T4',
-            'TRIMESTRE4': 'T4',
-            
-            'TOTAUX': 'TOTAUX',
-            'TOTAL': 'TOTAUX',
-            'TOTALS': 'TOTAUX',
-            'GRAND TOTAL': 'TOTAUX'
+            'TOTAUX': 'TOTAUX'
         }
-        
-        # Mots-clés pour la détection automatique de l'en-tête (avec toutes les variantes)
+        # Mots-clés pour la détection automatique de l'en-tête
         self.header_keywords = [
-            # Mois
-            'JAN', 'JANVIER', 'JANUARY', 'JANV',
-            'FEV', 'FEVRIER', 'FEBRUARY', 'FÉVRIER', 'FEB',
-            'MARS', 'MARCH', 'MAR',
-            'AVR', 'AVRIL', 'APRIL', 'APR',
-            'MAI', 'MAY',
-            'JUIN', 'JUNE', 'JUN',
-            'JUL', 'JUILLET', 'JULY',
-            'AOUT', 'AOÛT', 'AUGUST', 'AUG',
-            'SEPT', 'SEPTEMBRE', 'SEPTEMBER', 'SEP',
-            'OCT', 'OCTOBRE', 'OCTOBER',
-            'NOV', 'NOVEMBRE', 'NOVEMBER',
-            'DEC', 'DECEMBRE', 'DECEMBER', 'DÉCEMBRE',
-            
-            # Trimestres/Semestres
-            'T1', 'TRIM1', 'TRIMESTRE1',
-            'T2', 'TRIM2', 'TRIMESTRE2',
-            'T3', 'TRIM3', 'TRIMESTRE3',
-            'T4', 'TRIM4', 'TRIMESTRE4',
-            'S1', 'SEMESTRE1',
-            'S2', 'SEMESTRE2',
-            
-            # Totaux
-            'TOTAUX', 'TOTAL', 'TOTALS', 'GRAND TOTAL',
-            
-            # Autres
-            'PAGE', 'SERVICE', 'DESCRIPTION', 'Unnamed: 1'
+            'JANVIER', 'FEVRIER', 'MARS', 'T1', 'AVRIL', 'MAI', 'JUIN', 'T2',
+            'S1', 'JUILLET', 'AOÛT', 'SEPTEMBRE', 'SEPTEM', 'T3', 'T3.1', 'T3 TO',
+            'OCTOBRE', 'OCTOB', 'NOVEMBRE', 'NOVEM', 'DÉCEMBRE', 'DÉCEM', 'T4',
+            'TOTAUX', 'PAGE', 'SERVICE', 'DESCRIPTION', 'Unnamed: 1' # Inclure Unnamed: 1 dans la recherche d'en-tête si pertinent
         ]
         self.header_keywords_upper = [kw.upper() for kw in self.header_keywords]
 
@@ -172,7 +86,7 @@ class HealthcareExcelTransformer:
             
             # Bonus pour les lignes contenant les mots-clés typiques des en-têtes de données
             if ('TOTAUX' in row_values or 'TOTAL' in row_values) and \
-               (('JANVIER' in row_values or 'JAN' in row_values or 'T1' in row_values)):
+               (('JANVIER' in row_values or 'T1' in row_values)):
                 current_matches += 10 # Augmenter le score pour une meilleure détection
 
             if current_matches > max_matches:
@@ -346,28 +260,21 @@ class HealthcareExcelTransformer:
                 
                 transformed_row = {'service': str(service_name).strip()}
                 
-                # Nouvelle approche: mapper toutes les colonnes possibles
-                for actual_df_col_name in self.original_data.columns:
-                    # Ignorer la colonne service et les colonnes vides
-                    if actual_df_col_name == service_col or pd.isna(actual_df_col_name) or str(actual_df_col_name).strip() == '':
-                        continue
-                    
-                    # Trouver le nom CSV correspondant
-                    csv_col_name = None
-                    col_name_upper = str(actual_df_col_name).strip().upper()
-                    
-                    # Chercher dans le mapping
-                    for excel_key, csv_value in self.column_mapping.items():
-                        if excel_key.upper() == col_name_upper:
-                            csv_col_name = csv_value
+                for excel_col_key, csv_col_name in self.column_mapping.items():
+                    value = None
+                    # Chercher la colonne Excel correspondante dans le DataFrame original
+                    found_excel_col_in_df = False
+                    for actual_df_col_name in self.original_data.columns:
+                        if str(actual_df_col_name).strip().upper() == str(excel_col_key).strip().upper():
+                            value = row[actual_df_col_name]
+                            found_excel_col_in_df = True
                             break
                     
-                    # Si non trouvé, ignorer cette colonne
-                    if csv_col_name is None:
+                    if not found_excel_col_in_df:
+                        # Si la colonne n'est pas trouvée via le mapping direct, assigner 0.0
+                        transformed_row[csv_col_name] = 0.0
                         continue
-                    
-                    # Traiter la valeur
-                    value = row[actual_df_col_name]
+
                     if pd.isna(value):
                         transformed_row[csv_col_name] = 0.0
                     else:

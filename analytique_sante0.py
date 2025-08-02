@@ -123,64 +123,38 @@ class AnalytiqueAvanceeSante:
                 self.donnees[col] = self.donnees[col].astype('category')
 
     def _transformer_en_mensuel(self) -> pd.DataFrame:
-        """Transforme les données brutes en format mensuel optimisé avec gestion robuste des noms de colonnes."""
+        """Transforme les données brutes en format mensuel optimisé."""
         if self.donnees is None or self.donnees.empty:
             return pd.DataFrame()
 
-        # Dictionnaire de variantes pour chaque mois
-        mois_variantes = {
-            'JANVIER': ['JAN', 'JANVIER', 'JANUARY', 'JANV'],
-            'FEVRIER': ['FEV', 'FEVRIER', 'FEBRUARY', 'FÉVRIER', 'FEB'],
-            'MARS': ['MARS', 'MARCH', 'MAR'],
-            'AVRIL': ['AVR', 'AVRIL', 'APRIL', 'APR'],
-            'MAI': ['MAI', 'MAY'],
-            'JUIN': ['JUIN', 'JUNE', 'JUN'],
-            'JUILLET': ['JUL', 'JUILLET', 'JULY'],
-            'AOUT': ['AOUT', 'AOÛT', 'AUGUST', 'AUG'],
-            'SEPTEMBRE': ['SEPT', 'SEPTEMBRE', 'SEPTEMBER', 'SEP'],
-            'OCTOBRE': ['OCT', 'OCTOBRE', 'OCTOBER'],
-            'NOVEMBRE': ['NOV', 'NOVEMBRE', 'NOVEMBER'],
-            'DECEMBRE': ['DEC', 'DECEMBRE', 'DECEMBER', 'DÉCEMBRE']
-        }
+        mois_colonnes = ['JANVIER', 'FEVRIER', 'MARS', 'AVRIL', 'MAI', 'JUIN',
+                         'JUILLET', 'AOUT', 'SEPTEMBRE', 'OCTOBRE', 'NOVEMBRE', 'DECEMBRE']
+        
+        if 'service' not in self.donnees.columns:
+            raise ValueError("La colonne 'service' est manquante.")
+        
+        colonnes_presentes = [col for col in mois_colonnes if col in self.donnees.columns]
 
-        # Trouver les colonnes correspondantes dans le dataset
-        colonnes_trouvees = {}
-        for mois_std, variantes in mois_variantes.items():
-            for col in self.donnees.columns:
-                col_norm = str(col).strip().upper()
-                if col_norm in variantes:
-                    colonnes_trouvees[mois_std] = col
-                    break
-
-        if not colonnes_trouvees:
+        if not colonnes_presentes:
             print("Aucune colonne mensuelle trouvée - utilisation des données brutes.")
             return self.donnees
 
-        # Préparer le format long
         donnees_long = pd.melt(
             self.donnees,
             id_vars=['service'],
-            value_vars=list(colonnes_trouvees.values()),
-            var_name='mois_brut',
+            value_vars=colonnes_presentes,
+            var_name='mois',
             value_name='valeur'
         ).dropna(subset=['valeur'])
 
-        # Créer un mapping inverse pour la normalisation
-        mapping_normalisation = {v: k for k, v in colonnes_trouvees.items()}
-        donnees_long['mois'] = donnees_long['mois_brut'].map(mapping_normalisation)
-
-        # Mapping mois -> numéro
-        mois_to_num = {m: i+1 for i, m in enumerate(mois_variantes.keys())}
-        donnees_long['mois_num'] = donnees_long['mois'].map(mois_to_num)
-
-        # Créer les dates
+        mois_to_num = {m: i+1 for i, m in enumerate(mois_colonnes)}
         donnees_long['date'] = pd.to_datetime(
-            donnees_long['mois_num'].apply(
+            donnees_long['mois'].map(mois_to_num).apply(
                 lambda m: f"{self.annee_donnees}-{m}-01"
-            ), errors='coerce'
-        ).dropna()
+            )
+        )
 
-        return donnees_long[['service', 'date', 'valeur', 'mois']]
+        return donnees_long
 
     def analyse_exploratoire_donnees(self) -> Dict:
         """Réalise une analyse exploratoire des données."""

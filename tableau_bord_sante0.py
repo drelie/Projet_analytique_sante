@@ -59,61 +59,55 @@ class AnalytiqueSante:
             return False
 
     def _transformer_en_mensuel(self) -> pd.DataFrame:
-        """Transforme les données en format mensuel en gérant les colonnes manquantes et les variantes de noms."""
-        # Dictionnaire de variantes pour chaque mois
-        mois_variantes = {
-            'JANVIER': ['JAN', 'JANVIER', 'JANUARY', 'JANV'],
-            'FEVRIER': ['FEV', 'FEVRIER', 'FEBRUARY', 'FÉVRIER', 'FEB'],
-            'MARS': ['MARS', 'MARCH', 'MAR'],
-            'AVRIL': ['AVR', 'AVRIL', 'APRIL', 'APR'],
-            'MAI': ['MAI', 'MAY'],
-            'JUIN': ['JUIN', 'JUNE', 'JUN'],
-            'JUILLET': ['JUL', 'JUILLET', 'JULY'],
-            'AOÛT': ['AOUT', 'AOÛT', 'AUGUST', 'AUG'],
-            'SEPTEMBRE': ['SEPT', 'SEPTEMBRE', 'SEPTEMBER', 'SEP'],
-            'OCTOBRE': ['OCT', 'OCTOBRE', 'OCTOBER'],
-            'NOVEMBRE': ['NOV', 'NOVEMBRE', 'NOVEMBER'],
-            'DÉCEMBRE': ['DEC', 'DECEMBRE', 'DECEMBER', 'DÉCEMBRE']
+        """Transforme les données en format mensuel en gérant les colonnes manquantes."""
+        mapping_mois = {
+            'JANVIER': 1, 'FEVRIER': 2, 'MARS': 3, 'AVRIL': 4, 'MAI': 5, 'JUIN': 6,
+            'JUILLET': 7, 'AOÛT': 8, 'SEPTEMBRE': 9, 'OCTOBRE': 10, 'NOVEMBRE': 11, 'DECEMBRE': 12,
+            'SEPTEM': 9, 'OCTOB': 10, 'NOVEM': 11, 'DÉCEM': 12  # Variantes possibles
         }
-
-        # Trouver les colonnes correspondantes dans le dataset
-        colonnes_trouvees = {}
-        for mois_std, variantes in mois_variantes.items():
-            for col in self.donnees.columns:
-                col_norm = str(col).strip().upper()
-                if col_norm in variantes:
-                    colonnes_trouvees[mois_std] = col
-                    break
-
-        if not colonnes_trouvees:
+        
+        # Nettoyage des noms de colonnes
+        colonnes_disponibles = [col for col in mapping_mois.keys() if col in self.donnees.columns]
+        
+        if not colonnes_disponibles:
             st.warning("Aucune colonne de mois trouvée dans les données")
             return pd.DataFrame()
 
-        # Transformation avec melt
+        # Transformation avec melt en utilisant uniquement les colonnes disponibles
         donnees_long = self.donnees.melt(
             id_vars=['service'],
-            value_vars=list(colonnes_trouvees.values()),
-            var_name='nom_mois_brut',
+            value_vars=colonnes_disponibles,
+            var_name='nom_mois',
             value_name='valeur'
         ).dropna(subset=['valeur'])
-
-        # Normaliser les noms de mois
-        mapping_normalisation = {v: k for k, v in colonnes_trouvees.items()}
-        donnees_long['nom_mois'] = donnees_long['nom_mois_brut'].map(mapping_normalisation)
-
+        
+        # Conversion des types
+        donnees_long['valeur'] = pd.to_numeric(donnees_long['valeur'], errors='coerce')
+        donnees_long = donnees_long.dropna(subset=['valeur'])
+        
+        # Normalisation des noms de mois
+        mois_normalises = {
+            'SEPTEM': 'SEPTEMBRE',
+            'OCTOB': 'OCTOBRE',
+            'NOVEM': 'NOVEMBRE',
+            'DÉCEM': 'DECEMBRE'
+        }
+        donnees_long['nom_mois'] = donnees_long['nom_mois'].replace(mois_normalises)
+        
         # Mapping vers les numéros de mois
-        mapping_mois = {m: i+1 for i, m in enumerate(mois_variantes.keys())}
-        donnees_long['mois'] = donnees_long['nom_mois'].map(mapping_mois)
-
+        donnees_long['mois'] = donnees_long['nom_mois'].map(
+            {k: v for k, v in mapping_mois.items() if k in colonnes_disponibles}
+        )
+        
         # Ajout des dates
         donnees_long['date'] = donnees_long['mois'].apply(
-            lambda m: datetime(self.annee_donnees, m, 1) if not pd.isna(m) else None
+            lambda m: datetime(self.annee_donnees, m, 1)
         )
         donnees_long['trimestre'] = donnees_long['mois'].apply(
-            lambda m: f'T{(m-1)//3 + 1}' if not pd.isna(m) else None
+            lambda m: f'T{(m-1)//3 + 1}'
         )
         donnees_long['semestre'] = donnees_long['mois'].apply(
-            lambda m: 'S1' if m <= 6 else 'S2' if not pd.isna(m) else None
+            lambda m: 'S1' if m <= 6 else 'S2'
         )
         
         return donnees_long
