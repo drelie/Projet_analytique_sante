@@ -84,149 +84,91 @@ def data_without_full_months(create_test_data_dir):
     df.to_csv(filepath, index=False)
     return str(filepath)
 
-class TestAnalytiqueAvanceeSante:
+def test_initialization_success(sample_data_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    assert analytique.donnees is not None
+    assert not analytique.donnees.empty
+    assert analytique.annee_donnees == 2023
+    
+    # Vérification des services standardisés
+    expected_standard_services = sorted([
+        'Nb Consultants', 'Accouchements', 'Paludisme',
+        'Nb Consultations', 'Naissances vivantes', 
+        'Infections Respiratoires', 'Femmes VIH+'
+    ])
+    # Les services dans les données chargées doivent être ceux attendus
+    services_dans_donnees = sorted(analytique.donnees['service'].unique())
+    assert services_dans_donnees == expected_standard_services
 
-    def test_initialization_success(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        assert analytique.df is not None
-        assert not analytique.df.empty
-        assert analytique.annee == 2023
-        
-        # Vérification des services standardisés
-        expected_standard_services = sorted([
-            'Nb Consultants', 'Accouchements', 'Paludisme',
-            'Nb Consultations', 'Naissances vivantes', 
-            'Infections Respiratoires', 'Femmes VIH+'
-        ])
-        assert sorted(analytique.get_services_uniques()) == expected_standard_services
-
-    def test_initialization_file_not_found(self, non_existent_data_path):
+def test_initialization_file_not_found(non_existent_data_path):
+    with pytest.raises(FileNotFoundError):
         analytique = AnalytiqueAvanceeSante(non_existent_data_path)
-        assert analytique.df is None
-        assert "Erreur: Le fichier n'existe pas" in analytique.erreurs
 
-    def test_initialization_empty_file(self, empty_file_path):
+def test_initialization_empty_file(empty_file_path):
+    with pytest.raises(ValueError):
         analytique = AnalytiqueAvanceeSante(empty_file_path)
-        assert analytique.df is None
-        assert "Erreur: Le fichier est vide ou illisible." in analytique.erreurs
 
-    def test_initialization_invalid_data_format(self, invalid_data_path):
+def test_initialization_invalid_data_format(invalid_data_path):
+    with pytest.raises(ValueError):
         analytique = AnalytiqueAvanceeSante(invalid_data_path)
-        assert analytique.df is None
-        assert "Erreur: Le fichier ne contient pas les colonnes essentielles" in analytique.erreurs
 
-    def test_transformer_en_mensuel(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        assert analytique.df_mensuel is not None
-        assert 'ds' in analytique.df_mensuel.columns
-        assert 'y' in analytique.df_mensuel.columns
-        assert 'service' in analytique.df_mensuel.columns
-        
-        # Vérification du type de données des dates
-        assert pd.api.types.is_datetime64_dtype(analytique.df_mensuel['ds'])
-        
-        # Vérification des valeurs pour Janvier
-        jan_data = analytique.df_mensuel[analytique.df_mensuel['ds'].dt.month == 1]
-        assert jan_data['y'].sum() == 100 + 50 + 120 + 60 + 30 + 40 + 25  # 425
+def test_transformer_en_mensuel(sample_data_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    assert analytique.donnees_mensuelles is not None
+    assert 'service' in analytique.donnees_mensuelles.columns
+    assert 'date' in analytique.donnees_mensuelles.columns
+    assert 'valeur' in analytique.donnees_mensuelles.columns
+    
+    # Vérification du type de données des dates
+    assert pd.api.types.is_datetime64_dtype(analytique.donnees_mensuelles['date'])
+    
+    # Vérification des valeurs pour Janvier
+    jan_data = analytique.donnees_mensuelles[analytique.donnees_mensuelles['date'].dt.month == 1]
+    # Somme des valeurs de janvier pour tous les services
+    total_janvier = jan_data['valeur'].sum()
+    # Attendu: 100+50+120+60+30+40+25 = 425
+    assert total_janvier == 425
 
-    def test_transformer_en_mensuel_partial_months(self, data_without_full_months):
-        analytique = AnalytiqueAvanceeSante(data_without_full_months)
-        assert analytique.df_mensuel is not None
-        assert 'ds' in analytique.df_mensuel.columns
-        assert 'y' in analytique.df_mensuel.columns
-        assert 'service' in analytique.df_mensuel.columns
-        assert len(analytique.df_mensuel) == 4  # 2 services × 2 mois
+def test_transformer_en_mensuel_partial_months(data_without_full_months):
+    analytique = AnalytiqueAvanceeSante(data_without_full_months)
+    assert analytique.donnees_mensuelles is not None
+    assert 'service' in analytique.donnees_mensuelles.columns
+    assert 'date' in analytique.donnees_mensuelles.columns
+    assert 'valeur' in analytique.donnees_mensuelles.columns
+    assert len(analytique.donnees_mensuelles) == 4  # 2 services × 2 mois
 
-    def test_get_annees_disponibles(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        annees = analytique.get_annees_disponibles()
-        assert annees == [2023]
+def test_analyse_exploratoire_donnees(sample_data_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    stats = analytique.analyse_exploratoire_donnees()
+    assert stats['nombre_services'] == 7
+    assert '2023-01-01 to 2023-12-01' in stats['periode_couverte']
+    assert 'statistiques_services' in stats
+    assert 'Nb Consultants' in stats['statistiques_services']
 
-    def test_get_services_uniques(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        services = analytique.get_services_uniques()
-        assert services == [
-            'Nb Consultants', 'Accouchements', 'Paludisme',
-            'Nb Consultations', 'Naissances vivantes', 
-            'Infections Respiratoires', 'Femmes VIH+'
-        ]
+def test_prevision_demande(sample_data_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    previsions = analytique.prevision_demande(periodes_prevision=3)
+    assert len(previsions) > 0
+    for service_key in previsions:
+        assert 'forecast' in previsions[service_key]
+        assert 'metrics' in previsions[service_key]
 
-    def test_preparer_donnees_prediction(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        
-        assert len(df_prepared) == 12
-        assert df_prepared['y'].iloc[0] == 100  # Janvier
+def test_optimisation_ressources(sample_data_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    # Appel direct à optimisation_ressources, qui doit appeler prevision_demande si nécessaire
+    recommandations = analytique.optimisation_ressources()
+    assert not recommandations.empty
+    assert 'Service' in recommandations.columns
+    assert 'DemandePrévue' in recommandations.columns
+    assert 'RessourcesNécessaires' in recommandations.columns
 
-    def test_preparation_service_inexistant(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        df = analytique.preparer_donnees_prediction("Service Inconnu")
-        assert df is None
-        assert "Service non trouvé" in analytique.erreurs
-
-    def test_faire_predictions_prophet(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        
-        predictions = analytique.faire_predictions(df_prepared, modele='Prophet', periodes_futur=3)
-        assert len(predictions) == 15  # 12 mois + 3 prévisions
-        assert predictions['yhat'].min() > 0  # Valeurs cohérentes
-
-    def test_faire_predictions_random_forest(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Accouchements'
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        
-        predictions = analytique.faire_predictions(df_prepared, modele='RandomForest', periodes_futur=3)
-        assert len(predictions) == 15
-        assert 'yhat' in predictions.columns
-
-    def test_faire_predictions_invalid_model(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Paludisme'
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        
-        predictions = analytique.faire_predictions(df_prepared, modele='InvalidModel', periodes_futur=3)
-        assert predictions is None
-        assert "Modèle de prévision non supporté" in analytique.erreurs
-
-    def test_optimisation_des_ressources(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        predictions = analytique.faire_predictions(df_prepared, modele='Prophet', periodes_futur=3)
-        
-        # Ajout du service aux prédictions
-        predictions['service'] = service_test
-        
-        analytique.optimiser_ressources(
-            predictions_df=predictions,
-            type_ressource='consultants',
-            cout_moyen_ressource=1000
-        )
-        
-        resultats = analytique.resultats_optimisation[service_test]
-        assert 'ressources_necessaires' in resultats['predictions_optimisees'].columns
-        assert resultats['total_cout_estime'] > 0
-
-    def test_integration_data_flow(self, sample_data_path):
-        analytique = AnalytiqueAvanceeSante(sample_data_path)
-        service_test = 'Nb Consultants'
-        
-        # Chargement et transformation
-        assert analytique.df is not None
-        assert analytique.df_mensuel is not None
-        
-        # Préparation et prédiction
-        df_prepared = analytique.preparer_donnees_prediction(service_test)
-        predictions = analytique.faire_predictions(df_prepared, modele='Prophet', periodes_futur=3)
-        
-        # Optimisation
-        predictions['service'] = service_test
-        analytique.optimiser_ressources(predictions, type_ressource='consultants')
-        
-        # Vérification finale
-        resultats = analytique.resultats_optimisation[service_test]
-        assert not resultats['predictions_optimisees'].empty
+def test_generer_rapport(sample_data_path, tmp_path):
+    analytique = AnalytiqueAvanceeSante(sample_data_path)
+    # S'assurer que les prévisions et optimisations sont faites
+    analytique.prevision_demande()
+    analytique.optimisation_ressources()
+    rapport_path = analytique.generer_rapport()
+    assert os.path.exists(rapport_path)
+    assert "rapport_optimisation_2023.xlsx" in rapport_path
+    # Nettoyer
+    os.remove(rapport_path)

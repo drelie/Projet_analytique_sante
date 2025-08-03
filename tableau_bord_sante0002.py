@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Tableau de Bord d'Optimisation des Ressources Santé
-Version enrichie avec KPIs d'optimisation - CORRIGÉE
+Version avec standardisation des services clés
 """
 
 import pandas as pd
@@ -156,55 +156,6 @@ class AnalytiqueSante:
         
         return donnees_long
 
-    def calculer_kpis(self, cout_consultant=1000, objectif_croissance=15):
-        """Calcule les KPIs clés pour l'optimisation des ressources"""
-        if self.donnees_mensuelles is None:
-            return {}
-        
-        # Calcul des indicateurs clés
-        kpis = {}
-        
-        # 1. Taux d'occupation moyen des consultants
-        consultants = self.donnees_mensuelles[self.donnees_mensuelles['service'] == 'Nb Consultants']
-        consultations = self.donnees_mensuelles[self.donnees_mensuelles['service'] == 'Nb Consultations']
-        
-        if not consultants.empty and not consultations.empty:
-            taux_occupation = consultations['valeur'].sum() / consultants['valeur'].sum()
-            kpis['taux_occupation'] = taux_occupation * 100  # En pourcentage
-        
-        # 2. Évolution des services clés
-        services_cles = self.SERVICES_CLES[:5]  # Prendre les 5 premiers services clés
-        for service in services_cles:
-            service_data = self.donnees_mensuelles[self.donnees_mensuelles['service'] == service]
-            if not service_data.empty and len(service_data) > 1:
-                try:
-                    # Calculer la croissance seulement si on a des valeurs valides
-                    valeur_debut = service_data['valeur'].iloc[0]
-                    valeur_fin = service_data['valeur'].iloc[-1]
-                    
-                    if valeur_debut != 0 and not pd.isna(valeur_debut) and not pd.isna(valeur_fin):
-                        croissance = ((valeur_fin - valeur_debut) / valeur_debut) * 100
-                        kpis[f'croissance_{service}'] = croissance
-                        
-                        # Calculer l'écart à l'objectif
-                        ecart_objectif = croissance - objectif_croissance
-                        kpis[f'ecart_objectif_{service}'] = ecart_objectif
-                except Exception as e:
-                    # En cas d'erreur, on ignore ce service
-                    continue
-        
-        # 3. Ratio coût/efficacité
-        if not consultants.empty:
-            efficacite = consultations['valeur'].sum() / (consultants['valeur'].sum() * cout_consultant)
-            kpis['efficacite_ressources'] = efficacite
-        
-        # 4. Croissance moyenne des services clés
-        croissances = [v for k,v in kpis.items() if k.startswith('croissance_')]
-        if croissances:
-            kpis['croissance_moyenne'] = sum(croissances) / len(croissances)
-        
-        return kpis
-
     def analyse_exploratoire_donnees(self):
         """Réalise l'analyse exploratoire avec visualisations."""
         if self.donnees_mensuelles is None or self.donnees_mensuelles.empty:
@@ -280,7 +231,6 @@ class AnalytiqueSante:
                 # Visualisation - prévisions en rouge
                 fig = go.Figure()
                 
-                # CORRECTION: Fermeture correcte des parenthèses
                 # Historique en bleu
                 fig.add_trace(go.Scatter(
                     x=df_prophet['ds'], 
@@ -288,7 +238,7 @@ class AnalytiqueSante:
                     name='Historique', 
                     mode='lines+markers',
                     line=dict(color='blue')
-                ))  # CORRECTION: parenthèse fermante correctement placée
+                ))
                 
                 # Prévision en rouge
                 fig.add_trace(go.Scatter(
@@ -296,7 +246,7 @@ class AnalytiqueSante:
                     y=forecast['yhat'], 
                     name='Prévision', 
                     line=dict(dash='dash', color='red')
-                ))  # CORRECTION: parenthèse fermante correctement placée
+                ))
                 
                 fig.update_layout(
                     title=f"Prévision pour {service}",
@@ -310,8 +260,8 @@ class AnalytiqueSante:
         progress_bar.empty()
         status_text.empty()
 
-    def generer_rapport_insights(self, cout_consultant=1000, objectif_croissance=15):
-        """Génère un rapport d'analyse téléchargeable avec KPIs."""
+    def generer_rapport_insights(self):
+        """Génère un rapport d'analyse téléchargeable."""
         if self.donnees_mensuelles is None or self.donnees_mensuelles.empty:
             st.warning("Aucune donnée disponible pour générer le rapport")
             return
@@ -325,13 +275,6 @@ class AnalytiqueSante:
             # Statistiques descriptives
             stats = self.donnees_mensuelles.groupby('service')['valeur'].agg(['mean', 'median', 'std', 'sum'])
             stats.to_excel(writer, sheet_name='Statistiques')
-            
-            # Ajouter les KPIs
-            kpis = self.calculer_kpis(cout_consultant, objectif_croissance)
-            if kpis:
-                pd.DataFrame.from_dict(kpis, orient='index', columns=['Valeur']).to_excel(
-                    writer, sheet_name='KPIs_Optimisation'
-                )
         
         st.download_button(
             label="Télécharger le rapport complet",
@@ -346,7 +289,7 @@ def main():
     # Initialisation
     analytique = AnalytiqueSante()
     
-    # Sidebar - Upload et paramètres
+    # Sidebar - Upload
     with st.sidebar:
         st.header("Chargement des données")
         fichier = st.file_uploader("Téléverser un fichier CSV", type=["csv"])
@@ -356,22 +299,6 @@ def main():
                 st.success("Données chargées avec succès!")
             else:
                 st.error("Erreur lors du chargement")
-        
-        st.header("Paramètres d'Optimisation")
-        cout_consultant = st.number_input(
-            "Coût moyen mensuel d'un consultant (UM)", 
-            min_value=0, 
-            value=1000,
-            help="Coût incluant salaire, formation et équipement"
-        )
-        
-        objectif_croissance = st.slider(
-            "Objectif de croissance (%)", 
-            min_value=0, 
-            max_value=100, 
-            value=15,
-            help="Objectif de croissance annuel pour les services clés"
-        )
 
     # Main content
     if analytique.donnees is not None:
@@ -381,87 +308,11 @@ def main():
             analytique.analyse_exploratoire_donnees()
         
         with tabs[1]:
-            periodes = st.slider("Mois à prévoir", 1, 12, 6, key="prev_slider")
+            periodes = st.slider("Mois à prévoir", 1, 12, 6)
             analytique.prevision_demande(periodes)
         
         with tabs[2]:
-            st.header("🔍 Analyse d'Optimisation")
-            
-            # Afficher les KPIs sous forme de métriques
-            kpis = analytique.calculer_kpis(cout_consultant, objectif_croissance)
-            
-            if kpis:
-                col1, col2, col3 = st.columns(3)
-                
-                # KPI 1: Taux d'occupation
-                if 'taux_occupation' in kpis:
-                    col1.metric(
-                        "Taux d'Occupation Moyen", 
-                        f"{kpis['taux_occupation']:.1f}%",
-                        help="Nombre moyen de consultations par consultant"
-                    )
-                
-                # KPI 2: Efficacité des ressources
-                if 'efficacite_ressources' in kpis:
-                    col2.metric(
-                        "Efficacité des Ressources", 
-                        f"{kpis['efficacite_ressources']:.2f} consultations/UM",
-                        help="Nombre de consultations par unité monétaire investie"
-                    )
-                
-                # KPI 3: Croissance moyenne
-                if 'croissance_moyenne' in kpis:
-                    col3.metric(
-                        "Croissance Moyenne Services Clés", 
-                        f"{kpis['croissance_moyenne']:.1f}%",
-                        f"{kpis['croissance_moyenne'] - objectif_croissance:.1f}% vs objectif",
-                        help="Croissance moyenne des 5 principaux services"
-                    )
-                
-                # Graphique radar pour les KPIs de croissance
-                services_croissance = [k for k in kpis.keys() if k.startswith('croissance_')]
-                services_ecart = [k for k in kpis.keys() if k.startswith('ecart_objectif_')]
-                
-                if services_croissance:
-                    # Extraire les noms de services et valeurs
-                    services_noms = [k.replace('croissance_', '') for k in services_croissance]
-                    valeurs_croissance = [kpis[k] for k in services_croissance]
-                    
-                    # Graphique radar
-                    fig = px.line_polar(
-                        r=valeurs_croissance,
-                        theta=services_noms,
-                        line_close=True,
-                        title="Croissance des Services Clés (%)"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Graphique barres pour les écarts à l'objectif (seulement si les données existent)
-                    ecarts_disponibles = []
-                    services_avec_ecart = []
-                    
-                    for service_nom in services_noms:
-                        cle_ecart = f'ecart_objectif_{service_nom}'
-                        if cle_ecart in kpis:
-                            ecarts_disponibles.append(kpis[cle_ecart])
-                            services_avec_ecart.append(service_nom)
-                    
-                    if ecarts_disponibles and services_avec_ecart:
-                        fig_ecart = px.bar(
-                            x=services_avec_ecart,
-                            y=ecarts_disponibles,
-                            title="Écart à l'Objectif de Croissance",
-                            labels={'x': 'Service', 'y': 'Écart (%)'},
-                            color=ecarts_disponibles,
-                            color_continuous_scale=px.colors.diverging.RdYlGn
-                        )
-                        fig_ecart.add_hline(y=0, line_dash="dash", line_color="red")
-                        st.plotly_chart(fig_ecart, use_container_width=True)
-                    else:
-                        st.info("Données d'écart à l'objectif non disponibles pour l'affichage.")
-            
-            # Bouton de téléchargement du rapport
-            analytique.generer_rapport_insights(cout_consultant, objectif_croissance)
+            analytique.generer_rapport_insights()
 
 if __name__ == "__main__":
     main()
