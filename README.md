@@ -358,11 +358,11 @@ Pour questions sur ce projet de mémoire de master :
 **Note** : Ce projet constitue un travail académique de master démontrant l'application de techniques avancées de science des données dans le domaine de la santé publique.
 
 
-📞 Contact
+## 📞 Contact
 
-    Auteur : Élie SOUSSOUBIE
+    **Auteur : Élie SOUSSOUBIE
 
-    Superviseur : Mr Arnaud KONAN
+    **Superviseur : Mr Arnaud KONAN
 
-    Institution : Lomé Business School
+    **Institution : Lomé Business School
 
